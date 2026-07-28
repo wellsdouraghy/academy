@@ -224,7 +224,7 @@ svg{ display:block; }
     var STEPS = 210, step = (H * 1.06) / STEPS;
 
     return {
-      rate: 30, burst: 210,
+      rate: 14, burst: 105, fade: 0.0075,
       emit: function () {
         var side = rnd() < 0.5 ? -1 : 1;
         var ang = (GUT + Math.pow(rnd(), 1.25) * (MAX - GUT)) * side;
@@ -242,7 +242,7 @@ svg{ display:block; }
           if (y > H * 1.05 || x < -40 || x > W + 40) break;
         }
         var far = life > 0.993;
-        return [{ pts: pts, c: far ? red(0.78) : ink(0.06 + life * 0.20), w: far ? 1.2 : 0.75 }];
+        return [{ pts: pts, c: far ? red(0.7) : ink(0.045 + life * 0.13), w: far ? 1.1 : 0.7 }];
       }
     };
   }
@@ -278,7 +278,7 @@ svg{ display:block; }
     var i = 0, phase = rnd() * 6.28;
 
     return {
-      rate: 46, burst: 300,
+      rate: 26, burst: 200, fade: 0.006,
       emit: function (t) {
         var k = 2.6 + 1.75 * Math.sin(t * 0.043 + phase);   // the drifting multiplier
         var idx = i % N; i++;
@@ -292,7 +292,7 @@ svg{ display:block; }
             pts: [a[0], a[1],
                   b0[0] + (b1[0] - b0[0]) * f,
                   b0[1] + (b1[1] - b0[1]) * f],
-            c: idx % 41 === 0 ? red(0.42) : ink(0.085),
+            c: idx % 41 === 0 ? red(0.34) : ink(0.055),
             w: 0.7
           });
         }
@@ -311,7 +311,7 @@ svg{ display:block; }
     var n = 0;
 
     return {
-      rate: 2.2, burst: 15,
+      rate: 2.0, burst: 15, fade: 0.0022,
       emit: function () {
         var m = n % WRAP; n++;
         var s = s0 * Math.pow(GROW, m);
@@ -326,7 +326,7 @@ svg{ display:block; }
           pts.push(pts[0], pts[1]);
           out.push({
             pts: pts,
-            c: m === 0 ? red(0.72) : ink(0.09 + 0.17 * (1 - m / WRAP)),
+            c: m === 0 ? red(0.66) : ink(0.07 + 0.14 * (1 - m / WRAP)),
             w: 0.8
           });
         }
@@ -413,7 +413,7 @@ svg{ display:block; }
 
     /* erase a little every frame; ink lives about nine seconds.
        Normalised by dt so a 120Hz display doesn't run it double-time. */
-    var rate = boost > 0 ? 0.022 : 0.0055;
+    var rate = boost > 0 ? 0.022 : (fig.fade || 0.006);
     if (boost > 0) boost -= dt;
     ctx.globalCompositeOperation = 'destination-out';
     ctx.fillStyle = 'rgba(0,0,0,' + (1 - Math.pow(1 - rate, dt / 16.67)) + ')';
