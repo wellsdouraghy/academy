@@ -183,230 +183,253 @@ svg{ display:block; }
   <div class="corner r u" style="--d:1000ms">&copy; 2026 Confidential</div>
 </main>
 
+
 <script>
 (function () {
   'use strict';
   var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  /* ============================================================
-     A small flat-shaded solid renderer. The mark is two trapezoidal
-     prisms, so painter's algorithm over convex solids is exact.
-     ============================================================ */
-  var DEPTH = 58, CAM = 900, FOC = 900;
-  var LX = -0.42, LY = -0.72, LZ = -0.55;      // light, in view space
-  (function (l) { LX /= l; LY /= l; LZ /= l; }(Math.sqrt(LX*LX + LY*LY + LZ*LZ)));
+  function ink(a) { return 'rgba(14,14,14,' + a + ')'; }
+  function red(a) { return 'rgba(176,67,58,' + a + ')'; }
 
-  /* splay 0 = two closed bars, 1 = the mark fully opened */
-  function markPolys(splay) {
-    var o = 66 * (1 - splay);
-    return [
-      [[66,0],[114,0],[114,212],[o,212]],
-      [[126,0],[174,0],[240-o,212],[126,212]]
-    ];
-  }
-
-  function prism(poly) {
-    var n = poly.length, v = [], f = [], i, j;
-    for (i = 0; i < n; i++) v.push([poly[i][0], poly[i][1], -DEPTH/2]);
-    for (i = 0; i < n; i++) v.push([poly[i][0], poly[i][1],  DEPTH/2]);
-    var front = [], back = [];
-    for (i = 0; i < n; i++) front.push(i);
-    for (i = n - 1; i >= 0; i--) back.push(i + n);
-    f.push(front); f.push(back);
-    for (i = 0; i < n; i++) { j = (i + 1) % n; f.push([i, j, j + n, i + n]); }
-    return { v: v, f: f };
-  }
-
-  function shadeOf(a, b, c) {
-    var ux = b[0]-a[0], uy = b[1]-a[1], uz = b[2]-a[2];
-    var vx = c[0]-a[0], vy = c[1]-a[1], vz = c[2]-a[2];
-    var nx = uy*vz - uz*vy, ny = uz*vx - ux*vz, nz = ux*vy - uy*vx;
-    var l = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1;
-    var d = Math.abs((nx*LX + ny*LY + nz*LZ) / l);
-    return 0.24 + 0.76 * Math.pow(d, 0.85);
-  }
-  function tone(s) {
-    return 'rgb(' + Math.round(88 + 120*s) + ',' +
-                    Math.round(32 + 74*s)  + ',' +
-                    Math.round(27 + 66*s)  + ')';
-  }
-
-  /* ============================================================
-     FIGURES — three arrangements of the same solid
-     ============================================================ */
-  /* the mark itself — held fully open so it always reads as the logo,
-     and never square-on, or the solid flattens into a silhouette */
-  function figGate(t) {
-    return {
-      items: [{ polys: markPolys(1), tx: 0, ty: 0, tz: 0, s: 1 }],
-      ry: 0.34 + Math.sin(t * 0.17) * 0.26,
-      rx: -0.15 + Math.sin(t * 0.12) * 0.10,
-      span: 240, frac: 0.38
+  /* deterministic RNG, so a seed reproduces a figure */
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      var t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
     };
   }
 
-  /* a colonnade: the same gate, six deep, drifting toward the viewer.
-     Each fades in at the far end and out at the near one, so the wrap
-     never shows as a pop. */
-  function figColonnade(t) {
-    var items = [], N = 6, i, ph, a;
-    for (i = 0; i < N; i++) {
-      ph = ((t * 0.05) + i / N) % 1;
-      a = Math.min(1, ph / 0.16) * Math.min(1, (1 - ph) / 0.16);
-      items.push({
-        polys: markPolys(0.88),
-        tx: 0, ty: 0, tz: 980 - ph * 1340, s: 0.70, a: a
-      });
-    }
-    return {
-      items: items,
-      ry: 0.24 + Math.sin(t * 0.13) * 0.10,
-      rx: -0.09 + Math.sin(t * 0.1) * 0.08,
-      span: 240, frac: 0.30
-    };
-  }
+  /* the two halves of the mark, in its own 240x212 box */
+  var HALF_L = [[66, 0], [114, 0], [114, 212], [0, 212]];
+  var HALF_R = [[126, 0], [174, 0], [240, 212], [126, 212]];
 
-  /* a field: twelve gates, each breathing through the splay sweep */
-  function figField(t) {
-    var items = [], C = 4, R = 3, GX = 330, GY = 300, r, c, n, sp;
-    for (r = 0; r < R; r++) {
-      for (c = 0; c < C; c++) {
-        n = r * C + c;
-        sp = 0.10 + 0.90 * (0.5 + 0.5 * Math.sin(t * 0.34 + n * 0.55));
-        items.push({
-          polys: markPolys(sp),
-          tx: (c - (C-1)/2) * GX, ty: (r - (R-1)/2) * GY, tz: 0, s: 0.62
-        });
+  /* ============================================================
+     FIGURES. Each is a generator: it emits one element at a time,
+     for ever. The plate fades continuously underneath, so a figure
+     is always part-dissolving and part-redrawing — never static,
+     never a hard cut.
+     ============================================================ */
+
+  /* 01 — Divergence. Trajectories leave one origin; most run out
+     early, a rare one crosses the whole field. The envelope of the
+     fan, gutter and all, is the Academy mark. */
+  function mkDivergence(W, H, rnd) {
+    var ox = W * 0.5, oy = H * 0.12;
+    var GUT = 0.085;
+    /* narrow the spread on tall frames or the rays leave by the sides */
+    var MAX = Math.max(0.42, Math.min(0.78, Math.atan(W / H) * 0.92));
+    var STEPS = 210, step = (H * 1.06) / STEPS;
+
+    return {
+      rate: 30, burst: 210,
+      emit: function () {
+        var side = rnd() < 0.5 ? -1 : 1;
+        var ang = (GUT + Math.pow(rnd(), 1.25) * (MAX - GUT)) * side;
+        var life = 0.30 + Math.pow(rnd(), 1.55) * 0.70;
+        var vol = 0.0015 + rnd() * 0.006;
+        var r0 = H * (0.015 + rnd() * 0.05);
+        var x = ox + Math.sin(ang) * r0, y = oy + Math.cos(ang) * r0;
+        var pts = [x, y], n = Math.max(6, Math.round(life * STEPS)), s;
+
+        for (s = 0; s < n; s++) {
+          ang += (rnd() - 0.5) * vol;
+          x += Math.sin(ang) * step;
+          y += Math.cos(ang) * step;
+          pts.push(x, y);
+          if (y > H * 1.05 || x < -40 || x > W + 40) break;
+        }
+        var far = life > 0.993;
+        return [{ pts: pts, c: far ? red(0.78) : ink(0.06 + life * 0.20), w: far ? 1.2 : 0.75 }];
       }
+    };
+  }
+
+  /* 02 — Envelope. Chords strung between points on the gate's own
+     perimeter. Every line is straight and unremarkable; the curve
+     they collectively describe is in none of them. The multiplier
+     drifts, so the caustic never settles. */
+  function mkEnvelope(W, H, rnd) {
+    var S = Math.min(W * 0.80 / 240, H * 0.74 / 212);
+    var cx = W / 2, cy = H * 0.50, N = 260;
+
+    function perimeter(poly) {
+      var segs = [], per = 0, i, a, b, d;
+      for (i = 0; i < poly.length; i++) {
+        a = poly[i]; b = poly[(i + 1) % poly.length];
+        d = Math.sqrt((b[0]-a[0])*(b[0]-a[0]) + (b[1]-a[1])*(b[1]-a[1]));
+        segs.push({ a: a, b: b, d: d }); per += d;
+      }
+      var out = [];
+      for (i = 0; i < N; i++) {
+        var target = per * i / N, acc = 0, k = 0;
+        while (k < segs.length - 1 && acc + segs[k].d < target) { acc += segs[k].d; k++; }
+        var f = segs[k].d ? (target - acc) / segs[k].d : 0;
+        var x = segs[k].a[0] + (segs[k].b[0] - segs[k].a[0]) * f;
+        var y = segs[k].a[1] + (segs[k].b[1] - segs[k].a[1]) * f;
+        out.push([cx + (x - 120) * S, cy + (y - 106) * S]);
+      }
+      return out;
     }
+
+    var sides = [perimeter(HALF_L), perimeter(HALF_R)];
+    var i = 0, phase = rnd() * 6.28;
+
     return {
-      items: items,
-      ry: Math.sin(t * 0.15) * 0.40,
-      rx: -0.04 + Math.sin(t * 0.11) * 0.12,
-      span: (C - 1) * GX + 240, frac: 0.86
+      rate: 46, burst: 300,
+      emit: function (t) {
+        var k = 2.6 + 1.75 * Math.sin(t * 0.043 + phase);   // the drifting multiplier
+        var idx = i % N; i++;
+        var out = [], s, P, j, j0, j1, f, a, b0, b1;
+        for (s = 0; s < 2; s++) {
+          P = sides[s];
+          j = (idx * k) % N;
+          j0 = Math.floor(j); j1 = (j0 + 1) % N; f = j - j0;
+          a = P[idx]; b0 = P[j0]; b1 = P[j1];
+          out.push({
+            pts: [a[0], a[1],
+                  b0[0] + (b1[0] - b0[0]) * f,
+                  b0[1] + (b1[1] - b0[1]) * f],
+            c: idx % 41 === 0 ? red(0.42) : ink(0.085),
+            w: 0.7
+          });
+        }
+        return out;
+      }
+    };
+  }
+
+  /* 03 — Corridor. The same gate, born small at the vanishing point
+     and growing outward for ever. Nothing moves; each gate is simply
+     drawn a little larger than the last, and the fade does the rest. */
+  function mkCorridor(W, H, rnd) {
+    var vx = W * (0.46 + rnd() * 0.08), vy = H * (0.44 + rnd() * 0.08);
+    var unit = Math.min(W, H), WRAP = 20, GROW = 1.315;
+    var s0 = (unit * 0.012) / 212;
+    var n = 0;
+
+    return {
+      rate: 2.2, burst: 15,
+      emit: function () {
+        var m = n % WRAP; n++;
+        var s = s0 * Math.pow(GROW, m);
+        var out = [], g, i, poly, pts;
+
+        for (g = 0; g < 2; g++) {
+          poly = g ? HALF_R : HALF_L;
+          pts = [];
+          for (i = 0; i < poly.length; i++) {
+            pts.push(vx + (poly[i][0] - 120) * s * 212, vy + (poly[i][1] - 106) * s * 212);
+          }
+          pts.push(pts[0], pts[1]);
+          out.push({
+            pts: pts,
+            c: m === 0 ? red(0.72) : ink(0.09 + 0.17 * (1 - m / WRAP)),
+            w: 0.8
+          });
+        }
+        /* refresh the perspective rays once per cycle */
+        if (m === 0) {
+          var corners = [[0,0],[66,0],[114,0],[126,0],[174,0],[240,0],[0,212],[240,212]];
+          var far = s0 * Math.pow(GROW, WRAP + 2) * 212;
+          for (i = 0; i < corners.length; i++) {
+            out.push({
+              pts: [vx, vy,
+                    vx + (corners[i][0] - 120) * far,
+                    vy + (corners[i][1] - 106) * far],
+              c: ink(0.07), w: 0.7
+            });
+          }
+        }
+        return out;
+      }
     };
   }
 
   var FIGS = [
-    { name: 'Gate',      fn: figGate },
-    { name: 'Colonnade', fn: figColonnade },
-    { name: 'Field',     fn: figField }
+    { name: 'Divergence', make: mkDivergence },
+    { name: 'Envelope',   make: mkEnvelope },
+    { name: 'Corridor',   make: mkCorridor }
   ];
 
   /* ============================================================
-     LOOP
+     PLATE
      ============================================================ */
   var cv = document.getElementById('plate'), ctx = cv.getContext('2d');
   var capEl = document.getElementById('cap');
-  var W = 0, H = 0, dpr = 1, cur = 0, t0 = 0, swapAt = 0, swapping = false;
+  var W = 0, H = 0, dpr = 1;
+  var cur = 0, fig = null, acc = 0, last = 0, t0 = 0;
+  var swapAt = 0, boost = 0, pending = 0;
 
   function size() {
     dpr = Math.min(window.devicePixelRatio || 1, 2);
     W = cv.clientWidth; H = cv.clientHeight;
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineCap = 'round';
   }
 
-  function render(t) {
-    var fig = FIGS[cur].fn(t);
-    var cy = Math.cos(fig.ry), sy = Math.sin(fig.ry);
-    var cx = Math.cos(fig.rx), sx = Math.sin(fig.rx);
-    var K = (Math.min(W, H) * fig.frac) / fig.span;
-    var ox = W / 2, oy = H / 2;
-    var quads = [], i, j, k, m;
-
-    for (i = 0; i < fig.items.length; i++) {
-      var it = fig.items[i];
-      for (j = 0; j < it.polys.length; j++) {
-        var solid = prism(it.polys[j]);
-        /* to view space */
-        var view = [];
-        for (k = 0; k < solid.v.length; k++) {
-          var p = solid.v[k];
-          var x = (p[0] - 120) * it.s + it.tx;
-          var y = (p[1] - 106) * it.s + it.ty;
-          var z = p[2] * it.s + it.tz;
-          var x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
-          var y1 = y * cx - z1 * sx, z2 = y * sx + z1 * cx;
-          view.push([x1, y1, z2]);
-        }
-        for (k = 0; k < solid.f.length; k++) {
-          var face = solid.f[k], pts = [], depth = 0;
-          for (m = 0; m < face.length; m++) {
-            var q = view[face[m]];
-            var zc = q[2] * K + CAM;
-            if (zc < 40) zc = 40;
-            var f = FOC / zc;
-            pts.push(ox + q[0] * K * f, oy + q[1] * K * f);
-            depth += zc;
-          }
-          /* backface cull: screen y runs down, so a camera-facing polygon
-             winds clockwise and its shoelace sum is positive. Without this,
-             a solid drawn at reduced alpha shows its own interior. */
-          var area = 0;
-          for (m = 0; m < pts.length; m += 2) {
-            var m2 = (m + 2) % pts.length;
-            area += pts[m] * pts[m2 + 1] - pts[m2] * pts[m + 1];
-          }
-          if (area <= 0) continue;
-          quads.push({
-            pts: pts,
-            d: depth / face.length,
-            a: it.a === undefined ? 1 : it.a,
-            c: tone(shadeOf(view[face[0]], view[face[1]], view[face[2]]))
-          });
-        }
-      }
-    }
-
-    quads.sort(function (a, b) { return b.d - a.d; });     // far first
-    ctx.clearRect(0, 0, W, H);
-    for (i = 0; i < quads.length; i++) {
-      var qd = quads[i];
-      if (qd.a <= 0.004) continue;
-      ctx.globalAlpha = qd.a;
-      ctx.beginPath();
-      ctx.moveTo(qd.pts[0], qd.pts[1]);
-      for (j = 2; j < qd.pts.length; j += 2) ctx.lineTo(qd.pts[j], qd.pts[j + 1]);
-      ctx.closePath();
-      ctx.fillStyle = qd.c; ctx.fill();
-      /* overdraw the outline in the same tone so antialiased seams
-         between adjacent faces don't show as pale hairlines */
-      ctx.strokeStyle = qd.c; ctx.lineWidth = 1; ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
+  function stroke(o) {
+    ctx.strokeStyle = o.c;
+    ctx.lineWidth = o.w;
+    ctx.beginPath();
+    ctx.moveTo(o.pts[0], o.pts[1]);
+    for (var i = 2; i < o.pts.length; i += 2) ctx.lineTo(o.pts[i], o.pts[i + 1]);
+    ctx.stroke();
   }
 
-  function setFig(i) {
+  function build(i) {
     cur = i;
+    var seed = (Math.random() * 0xFFFF | 0) + 1;
+    fig = FIGS[i].make(W, H, mulberry32(seed));
+    acc = fig.burst;
     capEl.classList.add('out');
     setTimeout(function () {
       capEl.textContent = 'Fig. 0' + (i + 1) + ' — ' + FIGS[i].name;
       capEl.classList.remove('out');
-    }, 260);
+    }, 240);
     [].forEach.call(document.querySelectorAll('.rail button'), function (b, k) {
       b.setAttribute('aria-current', k === i ? 'true' : 'false');
     });
   }
 
-  /* cross-dissolve rather than a cut */
+  /* clear fast, then bring in the next figure */
   function swap(i) {
-    if (swapping) return;
-    swapping = true;
-    cv.classList.add('out');
-    setTimeout(function () {
-      setFig(i);
-      cv.classList.remove('out');
-      swapping = false;
-      swapAt = performance.now() + 17000;
+    if (pending) return;
+    boost = 950;
+    pending = setTimeout(function () {
+      pending = 0;
+      build(i);
+      swapAt = performance.now() + 21000;
     }, 850);
   }
 
   function tick(now) {
     requestAnimationFrame(tick);
-    if (!t0) t0 = now;
-    render((now - t0) / 1000);
-    if (!reduce && now > swapAt && !swapping) swap((cur + 1) % FIGS.length);
+    if (!last) { last = now; t0 = now; }
+    var dt = Math.min(now - last, 64); last = now;
+
+    /* erase a little every frame; ink lives about nine seconds.
+       Normalised by dt so a 120Hz display doesn't run it double-time. */
+    var rate = boost > 0 ? 0.022 : 0.0055;
+    if (boost > 0) boost -= dt;
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = 'rgba(0,0,0,' + (1 - Math.pow(1 - rate, dt / 16.67)) + ')';
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over';
+
+    if (!pending) {
+      acc += (dt / 1000) * fig.rate;
+      var guard = 0;
+      while (acc >= 1 && guard < 500) {
+        acc -= 1; guard++;
+        var ops = fig.emit((now - t0) / 1000);
+        for (var k = 0; k < ops.length; k++) stroke(ops[k]);
+      }
+    }
+    if (now > swapAt && !pending) swap((cur + 1) % FIGS.length);
   }
 
   var nav = document.getElementById('rail');
@@ -425,22 +448,31 @@ svg{ display:block; }
 
   var rt;
   window.addEventListener('resize', function () {
-    clearTimeout(rt); rt = setTimeout(size, 160);
+    clearTimeout(rt);
+    rt = setTimeout(function () { size(); ctx.clearRect(0, 0, W, H); build(cur); }, 170);
   });
 
   size();
-  setFig(0);
-  swapAt = performance.now() + 17000;
-  if (reduce) { render(3.4); } else { requestAnimationFrame(tick); }
+  build(0);
+  swapAt = performance.now() + 21000;
+
+  if (reduce) {
+    /* one still drawing, no cycling */
+    var n = fig.burst, j;
+    for (j = 0; j < n; j++) {
+      var ops = fig.emit(3.2);
+      for (var q = 0; q < ops.length; q++) stroke(ops[q]);
+    }
+  } else {
+    requestAnimationFrame(tick);
+  }
 
   /* ---------- page chrome ---------- */
   function open() {
     ['lockup', 'copy', 'plate'].forEach(function (id) {
       document.getElementById(id).classList.add('go');
     });
-    [].forEach.call(document.querySelectorAll('.u'), function (el) {
-      el.classList.add('go');
-    });
+    [].forEach.call(document.querySelectorAll('.u'), function (el) { el.classList.add('go'); });
   }
   if (document.fonts && document.fonts.ready) {
     document.fonts.ready.then(function () { requestAnimationFrame(open); });
