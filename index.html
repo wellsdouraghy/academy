@@ -338,6 +338,15 @@ svg{ display:block; }
             pts.push(ox + q[0] * K * f, oy + q[1] * K * f);
             depth += zc;
           }
+          /* backface cull: screen y runs down, so a camera-facing polygon
+             winds clockwise and its shoelace sum is positive. Without this,
+             a solid drawn at reduced alpha shows its own interior. */
+          var area = 0;
+          for (m = 0; m < pts.length; m += 2) {
+            var m2 = (m + 2) % pts.length;
+            area += pts[m] * pts[m2 + 1] - pts[m2] * pts[m + 1];
+          }
+          if (area <= 0) continue;
           quads.push({
             pts: pts,
             d: depth / face.length,
