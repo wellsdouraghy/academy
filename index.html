@@ -307,21 +307,21 @@ svg{ display:block; }
   function mkCorridor(W, H, rnd) {
     var vx = W * (0.46 + rnd() * 0.08), vy = H * (0.44 + rnd() * 0.08);
     var unit = Math.min(W, H), WRAP = 20, GROW = 1.315;
-    var s0 = (unit * 0.012) / 212;
+    var f0 = unit * 0.013 / 212;   // smallest gate ~13px tall
     var n = 0;
 
     return {
-      rate: 2.0, burst: 15, fade: 0.0022,
+      rate: 2.6, burst: 20, fade: 0.0022,
       emit: function () {
         var m = n % WRAP; n++;
-        var s = s0 * Math.pow(GROW, m);
+        var f = f0 * Math.pow(GROW, m);
         var out = [], g, i, poly, pts;
 
         for (g = 0; g < 2; g++) {
           poly = g ? HALF_R : HALF_L;
           pts = [];
           for (i = 0; i < poly.length; i++) {
-            pts.push(vx + (poly[i][0] - 120) * s * 212, vy + (poly[i][1] - 106) * s * 212);
+            pts.push(vx + (poly[i][0] - 120) * f, vy + (poly[i][1] - 106) * f);
           }
           pts.push(pts[0], pts[1]);
           out.push({
@@ -333,7 +333,7 @@ svg{ display:block; }
         /* refresh the perspective rays once per cycle */
         if (m === 0) {
           var corners = [[0,0],[66,0],[114,0],[126,0],[174,0],[240,0],[0,212],[240,212]];
-          var far = s0 * Math.pow(GROW, WRAP + 2) * 212;
+          var far = f0 * Math.pow(GROW, WRAP + 2);
           for (i = 0; i < corners.length; i++) {
             out.push({
               pts: [vx, vy,
@@ -413,7 +413,7 @@ svg{ display:block; }
 
     /* erase a little every frame; ink lives about nine seconds.
        Normalised by dt so a 120Hz display doesn't run it double-time. */
-    var rate = boost > 0 ? 0.022 : (fig.fade || 0.006);
+    var rate = boost > 0 ? 0.060 : (fig.fade || 0.006);
     if (boost > 0) boost -= dt;
     ctx.globalCompositeOperation = 'destination-out';
     ctx.fillStyle = 'rgba(0,0,0,' + (1 - Math.pow(1 - rate, dt / 16.67)) + ')';
